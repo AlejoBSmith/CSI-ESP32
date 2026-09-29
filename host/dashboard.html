@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Rat CSI</title>
+<style>
+body{font:16px system-ui;background:#111e2a;color:#e6edf5;max-width:1050px;margin:auto;padding:24px}
+p{line-height:1.5;color:#bdcedd}button,input,select{font:inherit;padding:9px;margin:4px;background:#263e53;color:white;border:1px solid #7893a8;border-radius:5px}
+button:disabled{opacity:.5}input{max-width:90%;box-sizing:border-box}.cards{display:flex;gap:15px;flex-wrap:wrap}
+.card{background:#1b3042;padding:16px;border-radius:10px;min-width:250px;flex:1}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+canvas{width:100%;height:200px;background:#192e3f}#phase{color:#84dacc;overflow-wrap:anywhere}#issues{color:#ffb58c}details{margin:18px 0}
+</style>
+<h1>Rat CSI</h1>
+<p>Los receptores funcionan sin PC. Esta interfaz permite ver y guardar los resultados, calibrar y ajustar los nodos. La puntuaci&oacute;n indica actividad del enlace; no identifica animales ni mide distancias.</p>
+<button id="calibrate" onclick="act({action:'calibrate'})">Calibrar &middot; espera 20 s</button>
+<button onclick="act({action:'reconnect'})">Reconectar USB</button>
+<button onclick="act({action:'stop_session'})">Cerrar y guardar</button>
+<p>Al encender, cada receptor espera 20 s y obtiene una referencia de amplitud durante unos 15 s. No se aprende ni se resta una actividad de fondo. Antes de completar la referencia se muestran resultados provisionales. Para repetirla sin PC, mant&eacute;n BOOT pulsado 1,5 s con la placa ya encendida.</p>
+<h2 id="fusion">INVALID</h2><div class="cards" id="nodes"></div>
+<h2 id="phase">UNLABELED</h2><button id="cancelwait" hidden onclick="act({action:'cancel_calibration_wait'})">Cancelar espera</button><p id="issues"></p>
+<h3>Actividad por receptor</h3>
+<label>Tiempo visible <select id="timespan"><option value="10">10 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></label>
+<p id="cadence"></p><canvas id="chart" width="1000" height="200"></canvas>
+<h3>Mapa de respuesta espacial</h3>
+<p>Arrastra las placas o introduce sus coordenadas en metros. Los enlaces y halos muestran respuestas simultaneas; no cuentan objetos. El centro ponderado es una aproximacion visual, no una distancia medida. Un solo RX no permite estimar un centro.</p>
+<canvas id="map" style="height:340px;touch-action:none"></canvas><p id="mapnote"></p>
+<label><input type="checkbox" id="mapcenter"> Mostrar centro ponderado experimental</label>
+<label>Minimo de actividad (%) <input id="mapminimum" type="number" min="0" step="0.1" value="1"></label>
+<details><summary>Posiciones y escala del mapa</summary>
+<label>Ancho (m) <input id="mapwidth" type="number" min="0.1" max="100" step="0.1"></label>
+<label>Alto (m) <input id="mapheight" type="number" min="0.1" max="100" step="0.1"></label>
+<select id="mapnode"><option>tx</option><option>rx1</option><option>rx2</option><option>rx3</option></select>
+<label>X (m) <input id="mapx" type="number" min="0" step="0.1"></label>
+<label>Y (m) <input id="mapy" type="number" min="0" step="0.1"></label>
+<label>Factor de sensibilidad <input id="mapsensitivity" type="number" min="0.01" step="0.1" value="1"></label>
+<button id="mapapply">Guardar montaje</button>
+<p>El factor divide el score solo para comparar enlaces en el mapa. Ajustalo mediante recorridos conocidos. La normalizacion del LED no se utiliza para localizar.</p>
+</details>
+<script src="/activity_map.js"></script>
+<details><summary>Ajustes</summary>
+<label>Nodo <select id="node"><option>rx1</option><option>rx2</option><option>rx3</option><option>tx</option></select></label>
+<p>Los ajustes se guardan en la placa. Despu&eacute;s de cambiar el procesamiento, vuelve a calibrar.</p>
+<label>Window <input id="window" type="number" min="64" max="1600" value="125"></label>
+<label>Hop <input id="hop" type="number" min="1" max="1600" value="62"></label>
+<button onclick="act({action:'command',node:el('node').value,command:{cmd:'config',window:Number(el('window').value),hop:Number(el('hop').value)}})">Aplicar window y hop</button>
+<label>Cobertura <input id="coverage" type="number" min="0.1" max="1" step="0.05" value="0.8"></label>
+<button onclick="act({action:'command',node:el('node').value,command:{cmd:'config',coverage_fraction:Number(el('coverage').value)}})">Aplicar cobertura</button>
+<button onclick="act({action:'command',node:el('node').value,command:{cmd:'defaults'}})">Restaurar defaults</button>
+<details><summary>Comando JSON</summary><input id="command" size="65" value='{"cmd":"status"}'>
+<button onclick="try{act({action:'command',node:el('node').value,command:JSON.parse(el('command').value)})}catch(e){el('issues').textContent=e.message}">Enviar</button>
+<p>Ejemplo: <code>{"cmd":"config","enter_score":4,"exit_score":2.5}</code>. La tasa habitual del TX es 500 Hz.</p></details>
+</details>
+<details><summary>Etiquetar una prueba</summary>
+<input id="label" placeholder="LOCAL_EMPTY / RODENT / HUMAN"><input id="notes" placeholder="Observaciones">
+<button onclick="act({action:'mark',label:el('label').value,notes:el('notes').value})">Guardar marca</button>
+<button onclick="act({action:'human_sequence'})">Prueba caminando &middot; 5 min</button>
+<p>Alterna 60 s sin movimiento local y 60 s caminando. El fondo de otros pisos no queda controlado.</p>
+</details><p id="folder"></p>
+<script>const el=id=>document.getElementById(id);async function act(a){try{let r=await fetch('/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a)});if(!r.ok)throw Error('HTTP '+r.status)}catch(e){el('issues').textContent=e.message}}
+const GUI_POLL_MS=100; // Browser refresh; measurement spacing is determined by RX hop.
+let latest=null,pollDelay=GUI_POLL_MS;
+function plot(h,now){
+  const c=el('chart'),x=c.getContext('2d'),span=Number(el('timespan').value),w=c.clientWidth,dpr=devicePixelRatio||1;
+  if(c.width!==Math.round(w*dpr)||c.height!==Math.round(200*dpr)){c.width=Math.round(w*dpr);c.height=Math.round(200*dpr)}
+  x.setTransform(dpr,0,0,dpr,0,0);
+  const hi=now??h.at(-1)?.t??0,lo=hi-span;
+  x.clearRect(0,0,w,200);
+  const visible=h.filter(p=>p.t>=lo&&p.t<=hi);
+  const max=visible.reduce((m,p)=>Math.max(m,p.score??0),5);
+  x.font='12px system-ui';x.strokeStyle='#385164';x.fillStyle='#bdcedd';
+  for(let i=0;i<=4;i++){
+    const px=20+i*(w-40)/4;x.beginPath();x.moveTo(px,25);x.lineTo(px,175);x.stroke();
+    x.textAlign=i===0?'left':i===4?'right':'center';x.fillText(((i/4-1)*span).toFixed(1)+' s',px,195);
+  }
+  x.textAlign='left';
+  ['rx1','rx2','rx3'].forEach((n,i)=>{
+    x.strokeStyle=x.fillStyle=['#68c5fd','#f4b66e','#a4e384'][i];x.beginPath();let active=false;
+    visible.filter(p=>p.node===n).forEach(p=>{
+      if(!Number.isFinite(p.score)){active=false;return}
+      const a=20+(p.t-lo)/span*(w-40),b=175-Math.max(0,p.score)/max*145;
+      if(active)x.lineTo(a,b);else x.moveTo(a,b);
+      if(p.provisional)x.fillRect(a-2,b-2,4,4);
+      x.fillRect(a-1,b-1,2,2);active=true;
+    });x.stroke();
+  });
+  x.fillStyle='#d2dce5';x.fillText('RX1 azul · RX2 naranja · RX3 verde · max '+max.toFixed(1),20,15);
+  c.dataset.points=visible.filter(p=>Number.isFinite(p.score)).length;
+  c.dataset.span=span;
+}
+function timing(states){
+  return Object.entries(states).filter(([n])=>n!=='tx').map(([n,v])=>{
+    const cfg=v.config??{},hz=Math.min(v.tuning?.output_hz??250,cfg.min_fs??250);
+    const duration=cfg.window? (cfg.window/hz).toFixed(3)+' s':'—';
+    const expected=cfg.hop? (cfg.hop/hz).toFixed(3)+' s':'—';
+    const observed=Number.isFinite(v._result_interval_s)&&(v.measurement_valid??['ACTIVE','CLEAR'].includes(v.state))?v._result_interval_s.toFixed(3)+' s':'—';
+    return `${n.toUpperCase()}: window ${cfg.window??'—'} (${duration}), hop ${cfg.hop??'—'} (cada ~${expected}); intervalo recibido ${observed}`;
+  }).join(' | ');
+}
+function loadSettings(){const c=latest?.states[el('node').value]?.config;if(c){['window','hop','coverage'].forEach(k=>{el(k).value=c[k==='coverage'?'coverage_fraction':k]})}}
+el('node').addEventListener('change',loadSettings);
+el('timespan').addEventListener('change',()=>{if(latest)plot(latest.history,latest.elapsed_s)});
+async function poll(){try{let r=await fetch('/status',{signal:AbortSignal.timeout(2500)});if(!r.ok)throw Error('HTTP '+r.status);let s=await r.json();pollDelay=Math.max(50,s.poll_ms??GUI_POLL_MS);const initial=latest===null;latest=s;if(initial)loadSettings();el('cadence').textContent=timing(s.states);el('fusion').textContent='Fusión: '+s.fused;const deviceWait=Math.max(0,...Object.values(s.states).map(v=>v.calibration_wait_s??0));const waitSeconds=deviceWait||(s.label==='CALIBRATION_COUNTDOWN'?s.remaining:0);const waiting=waitSeconds>0;el('calibrate').disabled=waiting;el('cancelwait').hidden=!waiting;el('phase').textContent=waiting?'Aléjate de la zona: la calibración empieza en '+waitSeconds+' s':({UNLABELED:'Sin etiqueta',LOCAL_BACKGROUND_CALIBRATION:Object.entries(s.states).filter(([n,v])=>n!=='tx'&&v.role!=='TX').every(([,v])=>v.amplitude_calibrated)?'Referencia de amplitud lista':'Obteniendo referencia de amplitud',CALIBRATION_CANCELLED:'Espera cancelada',SEQUENCE_COMPLETE:'Prueba terminada'}[s.label]??s.label)+(s.remaining!==null?' · '+s.remaining+' s':'');el('issues').textContent=Object.values(s.issues).join(' | ');el('folder').textContent='Sesión: '+s.folder;el('nodes').replaceChildren();Object.entries(s.states).forEach(([n,v])=>{let d=document.createElement('div');d.className='card';let title=document.createElement('h3');title.textContent=n+' · '+v.state;let p=document.createElement('pre');p.textContent=`${v.amplitude_calibrated?'Referencia de amplitud lista':'PROVISIONAL: requiere referencia de amplitud'}\n${v.reason}${v.calibration_wait_s?' ('+v.calibration_wait_s+' s)':''}\nID: ${v.device_id??n}\nCSI: ${(v.effective_fs??0).toFixed(1)} Hz · pérdidas: ${((v.packet_loss??0)*100).toFixed(1)} %\nVariacion (%): ${(v.measurement_valid??['ACTIVE','CLEAR'].includes(v.state))?(v.score??0).toFixed(2):'—'} · umbral: ${v.config?.enter_score}\nMaximo LED: ${v.led_peak?.toFixed(2)??'--'} % \nRecuperaciones: ${v.recovery_count??0} (${v.last_recovery??'--'})\nRSSI: ${v.rssi??'--'} dBm · ruido: ${v.noise_floor??'--'} dBm\nCola: ${v.queue_drops??'--'} · USB: ${v.telemetry_drops??'--'}\nSubportadoras utilizables: ${v.usable_carriers??v.selected??'--'} / ${v.selected??'--'} (min. ${v.required_carriers??'--'})\nTop: ${(v.top??[]).join(', ')} · referencia: ${v.reference_id??'--'}`;if(v.role==='TX')p.textContent=`TX: ${v.commanded_hz} Hz solicitados\nEnvíos aceptados: ${v.tx_count} · errores: ${v.tx_errors}\nCanal: ${v.config?.channel}\n${v.board??''} · ${v.transport??''}`;d.append(title,p);el('nodes').append(d)});plot(s.history,s.elapsed_s);ActivityMap.update(s.states)}catch(e){el('fusion').textContent='INVALID · SIN ENLACE CON EL PC';el('issues').textContent=e.message}finally{setTimeout(poll,pollDelay)}}ActivityMap.init();poll();</script></html>

@@ -1,0 +1,17 @@
+const assert=require('node:assert/strict');
+const {estimate}=require('../host/activity_map.js');
+const layout={confirmed:true,nodes:{tx:{x:0,y:0},rx1:{x:4,y:0},rx2:{x:0,y:4},rx3:{x:4,y:4}}};
+const state=score=>({score,measurement_valid:true,amplitude_calibrated:true,_feature_age_s:.1});
+assert.equal(estimate(layout,{rx1:state(10)}).center,null);
+let s={rx1:state(10),rx2:state(2),rx3:state(2)};
+let a=estimate(layout,s,0);assert.ok(a.center.x>a.center.y);
+s={rx1:state(2),rx2:state(10),rx3:state(2)};
+let b=estimate(layout,s,0);assert.ok(b.center.y>b.center.x);
+assert.equal(b.links.filter(l=>l.usable&&l.weight>0).length,3);
+s.rx2._feature_age_s=10;s.rx3.measurement_valid=false;
+assert.equal(estimate(layout,s).center,null);
+s={rx1:state(0),rx2:state(0)};assert.equal(estimate(layout,s).center,null);
+s={rx1:state(10),rx2:{...state(10),amplitude_calibrated:false}};
+assert.equal(estimate(layout,s).center,null);
+assert.equal(estimate({...layout,confirmed:false},{rx1:state(10),rx2:state(10)}).center,null);
+console.log('PASS: map shifts with link weights, retains multiple responses, excludes stale/provisional/invalid measurements and single-link localization');

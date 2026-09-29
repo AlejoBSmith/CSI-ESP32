@@ -1,0 +1,9 @@
+{
+  "private": true,
+  "scripts": {
+    "test": "node test_map.cjs && node test_ui.cjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.63.0"
+  }
+}
