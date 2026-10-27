@@ -1,0 +1,21 @@
+.pio/
+.verification/
+firmware/managed_components/
+firmware/sdkconfig
+firmware/sdkconfig.*
+!firmware/sdkconfig.defaults
+firmware/main/build_version.h
+captures/
+__pycache__/
+*.py[cod]
+node_modules/
+*.log
+.local/
+
+# Optional local development tools; not required to build or run.
+/tests/
+.env
+.env.*
+!.env.example
+*.pem
+*.key

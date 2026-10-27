@@ -46,3 +46,15 @@ Desktop.ini
 
 # Keep dependencies.lock, package-lock.json, sdkconfig.defaults,
 # source files, tests and documentation: they are needed to reproduce builds.
+
+# Experimental router CSI: local development and measurements stay off GitHub.
+/router_csi/tests/
+/router_csi/.verification/
+/router_csi/.local/
+
+# Local secrets and device provisioning exports.
+.env
+.env.*
+!.env.example
+*.pem
+*.key
