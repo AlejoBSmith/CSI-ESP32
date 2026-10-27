@@ -1,5 +1,10 @@
 # Rat CSI - XIAO ESP32S3
 
+> **Experimental: router CSI.** La variante nueva utiliza un router Wi-Fi como
+> transmisor y XIAO ESP32S3 como receptores, con banco temporal multiescala y
+> graficas individuales y conjuntas. Instrucciones: [router_csi/README.md](router_csi/README.md).
+> Los comandos de esta pagina corresponden a la variante ESP-NOW original.
+
 Un transmisor ESP-NOW y hasta tres receptores para observar actividad mediante
 CSI. Cada receptor puede funcionar con batería o cargador USB, sin PC.
 Es un detector experimental de actividad: no identifica ratas ni estima distancias.

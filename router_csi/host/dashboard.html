@@ -1,0 +1,245 @@
+<!doctype html>
+<html lang="es">
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Router CSI - CSI_LAB</title>
+<style>
+body{font:16px system-ui;background:#111e2a;color:#e6edf5;max-width:1050px;margin:auto;padding:24px}
+p{line-height:1.5;color:#bdcedd}button,input,select{font:inherit;padding:9px;margin:4px;background:#263e53;color:white;border:1px solid #7893a8;border-radius:5px}
+button:disabled{opacity:.5}input{max-width:90%;box-sizing:border-box}.cards{display:flex;gap:15px;flex-wrap:wrap}
+.card{background:#1b3042;padding:16px;border-radius:10px;min-width:250px;flex:1}pre{white-space:pre-wrap;overflow-wrap:anywhere}
+canvas{width:100%;height:200px;background:#192e3f}#phase{color:#84dacc;overflow-wrap:anywhere}#issues{color:#ffb58c}details{margin:18px 0}
+#wifi_form{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px}
+#wifi_form label{display:flex;flex-direction:column}
+#wifi_form input,#wifi_form select{width:100%;max-width:100%;margin:4px 0}
+#wifi_form button{align-self:end}
+.joint-primary{border:1px solid #b67ed6}.joint-score{font-size:2.2rem;font-weight:700;color:#e6a4ff}.joint-primary p{margin:8px 0}.joint-primary pre{margin-bottom:0}
+</style>
+<h1>Router CSI - CSI_LAB</h1>
+<p>Los receptores funcionan sin PC. Esta interfaz permite ver y guardar los resultados, calibrar y ajustar los nodos. La puntuaci&oacute;n indica actividad del enlace; no identifica animales ni mide distancias.</p>
+<button id="calibrate" onclick="act({action:'calibrate'})">Calibrar &middot; espera 20 s</button>
+<button onclick="act({action:'reconnect'})">Reconectar USB</button>
+<button onclick="act({action:'stop_session'})">Cerrar y guardar</button>
+<p>Al encender, cada receptor espera 20 s y obtiene una referencia de amplitud durante unos 15 s. No se aprende ni se resta una actividad de fondo. Antes de completar la referencia se muestran resultados provisionales. Para repetirla sin PC, mant&eacute;n BOOT pulsado 1,5 s con la placa ya encendida.</p>
+<div class="card joint-primary" id="joint_card" data-mode="INVALID">
+<h2>Actividad conjunta (coincidencia)</h2>
+<div><span class="joint-score" id="joint_score">--</span> <span>indice &middot; umbral de entrada 1</span></div>
+<p id="joint_state">Sin resultado conjunto</p><pre id="joint_details"></pre><p id="joint_reason"></p>
+<p>Con dos receptores, el indice conserva la respuesta comun y limita una respuesta que aparece solo en uno. Requiere ambos resultados validos, recientes y alineados. No es una probabilidad ni identifica la causa del movimiento. Con un solo receptor configurado, muestra su indice individual normalizado, sin confirmar coincidencia.</p>
+</div>
+<h2 id="fusion">INVALID</h2><div class="cards" id="nodes"></div>
+<h2 id="phase">UNLABELED</h2><button id="cancelwait" hidden onclick="act({action:'cancel_calibration_wait'})">Cancelar espera</button><p id="issues"></p>
+<details open><summary>Conexion al AP y diagnostico</summary>
+<p>Esta variante requiere firmware <code>router_rx</code>. El AP es el transmisor del mapa. La PC conserva su conexion habitual a Internet.</p>
+<form id="wifi_form" autocomplete="off">
+<label>Receptor <select id="wifi_node"><option>rx1</option><option selected>rx2</option><option>rx3</option></select></label>
+<label>SSID <input id="wifi_ssid" value="CSI_LAB" maxlength="32" required></label>
+<label>Password <input id="wifi_password" type="password" autocomplete="new-password" minlength="8" maxlength="63" required></label>
+<label>IP del AP <input id="wifi_target" value="192.168.50.1" required></label>
+<label>Solicitudes/s <input id="wifi_hz" type="number" min="10" max="500" step="1" value="100" required></label>
+<button type="submit">Guardar en el XIAO y conectar</button>
+</form>
+<p>La password se envia por USB y se guarda solo en el XIAO, en una configuracion separada. No se guarda en las capturas. Introducela por este formulario, no como marca ni observacion.</p>
+<div id="router_diagnostics" class="cards"></div>
+</details>
+<h3>Actividad por receptor</h3>
+<p>El score combina evidencia coherente en varios periodos y confirma su continuidad entre resultados. La curva principal muestra la salida confirmada; raw permite inspeccionar la respuesta previa a esa confirmacion. No es una probabilidad; no se aprende actividad de fondo. La escala dominante es el intervalo de analisis que mas aporta; no mide el periodo, la frecuencia ni la duracion del movimiento.</p>
+<label>Tiempo visible <select id="timespan"><option value="10">10 s</option><option value="30" selected>30 s</option><option value="60">60 s</option></select></label>
+<label title="Selecciona el banco que quieres inspeccionar. Ejemplo: RX2 permite comparar sus escalas con la salida individual naranja.">Banco de <select id="bank_node"><option>rx1</option><option>rx2</option><option>rx3</option></select></label>
+<label title="Ejemplo: 7 escalas entre 250 y 2000 ms permiten comparar respuestas breves y sostenidas. Una escala invalida interrumpe solo su curva."><input type="checkbox" id="components"> Ver escalas de <span id="components_node">RX1</span></label>
+<label title="Raw es la fusion entre escalas antes de confirmar continuidad. Ejemplo: un pico aislado puede aparecer en raw mientras la salida confirmada permanece en cero."><input type="checkbox" id="rawbank"> Ver raw de <span id="rawbank_node">RX1</span></label><p id="cadence"></p><p id="scale_legend"></p><canvas id="chart" width="1000" height="200"></canvas>
+<h3>Curva de actividad conjunta</h3>
+<p>Comparte el tiempo visible con las curvas individuales, pero utiliza su propio eje: score de cada RX dividido por su umbral de entrada. Con dos RX, el indice es min(max(x1, x2), 2 &times; min(x1, x2)). La linea discontinua marca 1; una interrupcion indica que no hay resultado conjunto valido.</p>
+<canvas id="joint_chart" width="1000" height="200" aria-label="Indice de actividad conjunta; umbral de entrada 1"></canvas>
+<h3>Mapa de respuesta espacial</h3>
+<p>Arrastra el AP y las placas o introduce sus coordenadas en metros. Los enlaces y halos muestran respuestas simultaneas; no cuentan objetos. El centro ponderado es una aproximacion visual, no una distancia medida. Un solo RX no permite estimar un centro.</p>
+<canvas id="map" style="height:340px;touch-action:none"></canvas><p id="mapnote"></p>
+<label><input type="checkbox" id="mapcenter"> Mostrar centro ponderado experimental</label>
+<label>Minimo de actividad (%) <input id="mapminimum" type="number" min="0" step="0.1" value="1"></label>
+<details><summary>Posiciones y escala del mapa</summary>
+<label>Ancho (m) <input id="mapwidth" type="number" min="0.1" max="100" step="0.1"></label>
+<label>Alto (m) <input id="mapheight" type="number" min="0.1" max="100" step="0.1"></label>
+<select id="mapnode"><option value="tx">AP</option><option>rx1</option><option>rx2</option><option>rx3</option></select>
+<label>X (m) <input id="mapx" type="number" min="0" step="0.1"></label>
+<label>Y (m) <input id="mapy" type="number" min="0" step="0.1"></label>
+<label>Factor de sensibilidad <input id="mapsensitivity" type="number" min="0.01" step="0.1" value="1"></label>
+<button id="mapapply">Guardar montaje</button>
+<p>El factor divide el score solo para comparar enlaces en el mapa. Ajustalo mediante recorridos conocidos. La normalizacion del LED no se utiliza para localizar.</p>
+</details>
+<script src="/activity_map.js"></script>
+<details><summary>Ajustes</summary>
+<label>Nodo <select id="node"><option>rx1</option><option>rx2</option><option>rx3</option></select></label>
+<p>Los ajustes se guardan en la placa. Despu&eacute;s de cambiar el procesamiento, vuelve a calibrar.</p>
+<label title="Extremo maximo del banco; en modo dual es la ventana lenta. Duracion = window / 100. Ejemplo: 200 slots cubren 2 segundos.">Periodo maximo / lenta (slots) <input id="window" type="number" min="16" max="1600" value="200"></label>
+<label title="Separacion entre resultados = hop / 100. Ejemplo: 10 produce un resultado cada 100 ms.">Hop <input id="hop" type="number" min="1" max="1600" value="10"></label>
+<label title="Extremo minimo del banco; en modo dual es la ventana rapida. Duracion = fast_window / 100. Ejemplo: 25 slots cubren 250 ms y debe ser menor o igual que el maximo.">Periodo minimo / rapida (slots) <input id="fast_window" type="number" min="16" max="1600" value="25"></label>
+<label title="Solo aplica a Fusion rapida/lenta (detector 1). Peso de la rapida cuando no hay respaldo de la lenta. Ejemplo: 0.65 convierte un score rapido de 10 en 6.5 si la lenta es cero.">Peso rapido solo <input id="fast_weight" type="number" min="0" max="1" step="0.05" value="0.65"></label>
+<label title="Numero de subportadoras mas coherentes que se agregan por mediana. Ejemplo: 12 requiere evidencia repartida, no un unico pico.">Top K <input id="top_k" type="number" min="1" max="32" value="12"></label>
+<label title="Permite comparar procesamiento con la misma adquisicion. Ejemplo: Todas utiliza 56 posiciones HT20 y excluye DC/guardas.">Subportadoras <select id="carrier_mode"><option value="1">Todas utiles</option><option value="0">12 grupos fijos</option><option value="2">Todas, suavizadas</option></select></label>
+<label title="Banco combina periodos contiguos y confirma continuidad. Los modos dual y CV conservan el procesamiento anterior para comparar.">Detector <select id="detector_kind"><option value="2" selected>Banco multiescala</option><option value="1">Fusion rapida/lenta</option><option value="0">CV anterior</option></select></label>
+<label title="Cantidad de periodos entre los extremos. Ejemplo: 7 escalas entre 25 y 200 slots.">Escalas <input id="scale_count" type="number" min="2" max="8" step="1" value="7"></label>
+<label title="Numero minimo de escalas contiguas que respaldan la respuesta. Ejemplo: 2 exige soporte en periodos vecinos.">Consenso contiguo <input id="consensus_scales" type="number" min="2" max="7" step="1" value="2"></label>
+<label title="La mediana causal usa 2k-1 resultados. Ejemplo: 2 usa los ultimos 3 y agrega aproximadamente 100 ms con hop 10; 1 omite el filtro.">Confirmacion (k) <input id="confirm_hops" type="number" min="1" max="4" step="1" value="2"></label>
+<label title="Umbral del score para entrar en ACTIVE. Ejemplo: 4 exige un score de forma de al menos 4; requiere validacion experimental.">Entrada <input id="enter_score" type="number" min="0.01" step="0.01" value="4"></label>
+<label title="Umbral para volver a CLEAR; debe ser menor que Entrada. Ejemplo: 2.5.">Salida <input id="exit_score" type="number" min="0" step="0.1" value="2.5"></label>
+<button id="apply_config" onclick="applySettings()">Aplicar ajustes</button>
+<label title="Fraccion de subportadoras con amplitud util. Ejemplo: 0.8 exige al menos 45 de 56 en HT20. La cobertura temporal se muestra en el diagnostico.">Cobertura de subportadoras <input id="coverage" type="number" min="0.1" max="1" step="0.05" value="0.8"></label>
+<button onclick="act({action:'command',node:el('node').value,command:{cmd:'config',coverage_fraction:Number(el('coverage').value)}})">Aplicar cobertura</button>
+<button onclick="act({action:'command',node:el('node').value,command:{cmd:'defaults'}})">Restaurar defaults</button>
+<label title="Las solicitudes son independientes de los 100 slots/s del detector. Ejemplo: 150 solicitudes/s no cambia las duraciones de las ventanas.">Solicitudes/s de prueba <input id="traffic_hz" type="number" min="10" max="500" step="1" value="100"></label>
+<label title="Async permite varias solicitudes pendientes. Sequential mantiene el cliente anterior para comparar.">Generador <select id="traffic_mode"><option value="sequential">Sequential</option><option value="async">Async</option></select></label>
+<button id="apply_traffic" onclick="act({action:'command',node:el('node').value,command:{cmd:'traffic',mode:el('traffic_mode').value,ping_hz:Number(el('traffic_hz').value)}})">Aplicar trafico</button>
+<p>El cambio de trafico conserva la conexion y la referencia de amplitud. No cambia window, hop ni los umbrales.</p>
+<details><summary>Comando JSON</summary><input id="command" size="65" value='{"cmd":"status"}'>
+<button onclick="try{act({action:'command',node:el('node').value,command:JSON.parse(el('command').value)})}catch(e){el('issues').textContent=e.message}">Enviar</button>
+<p>Ejemplo: <code>{"cmd":"config","enter_score":4,"exit_score":2.5}</code>. La tasa de ping se configura en Conexion al AP; CSI y respuestas ICMP no son equivalentes.</p></details>
+</details>
+<details><summary>Etiquetar una prueba</summary>
+<input id="label" placeholder="LOCAL_EMPTY / RODENT / HUMAN"><input id="notes" placeholder="Observaciones">
+<button onclick="act({action:'mark',label:el('label').value,notes:el('notes').value})">Guardar marca</button>
+<button onclick="act({action:'human_sequence'})">Prueba caminando &middot; 5 min</button>
+<p>Alterna 60 s sin movimiento local y 60 s caminando. El fondo de otros pisos no queda controlado.</p>
+</details><p id="folder"></p>
+<script>const el=id=>document.getElementById(id);async function act(a){try{let r=await fetch('/action',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(a)});if(!r.ok)throw Error('HTTP '+r.status)}catch(e){el('issues').textContent=e.message}}
+function routerDiagnostics(states){
+ const box=el('router_diagnostics');box.replaceChildren();
+ for(const [id,v] of Object.entries(states)){
+  if(id==='tx')continue;const w=v.router??{};
+  const card=document.createElement('div');card.className='card';const p=document.createElement('pre');
+  const fmt=x=>Number.isFinite(x)?(x/1000).toFixed(2)+' ms':'--';
+  const reasons={0:'Sin fallos registrados',8:'Desconexion solicitada por el dispositivo',15:'Negociacion WPA2 agotada: revisar password/seguridad del AP',200:'Se perdieron beacons del AP',201:'No se encontro el AP',202:'Autenticacion rechazada',203:'Asociacion rechazada',204:'Timeout de negociacion de seguridad',205:'Conexion con el AP fallida',210:'Seguridad del AP incompatible',211:'Modo de seguridad inferior al configurado',212:'Se?al inferior al umbral'};
+  p.textContent=`${id.toUpperCase()} ? ${w.connection??'SIN ESTADO DEL AP'}\nSSID: ${w.ssid??'--'} ? AP: ${w.target??'--'}\nIP XIAO: ${w.local_ip??'--'} ? BSSID: ${w.bssid??'--'}\nCanal: ${v.config?.channel??'--'} ? ${v.csi_layout??'--'} / 20 MHz\nGanancia RX: ${v.rx_gain_fixed?'fija':'automatica'} ? ${v.rx_gain_error??'--'}\nAgregacion RX: ${v.ampdu_rx?'activada':'desactivada'}\nCobertura temporal minima: ${Math.round(100*(v.tuning?.sample_coverage_fraction??1))} %\nGenerador: ${w.probe_mode??'sequential'}\nCadencia de envio p50 / p95: ${fmt(w.send_interval_p50_us)} / ${fmt(w.send_interval_p95_us)}\nRTT p95: ${fmt(w.rtt_p95_us)}\nPendientes: ${w.pending_requests??0} - saltos de agenda: ${w.schedule_skips??0}\nErrores de envio: ${w.ping_send_errors??0} - ultimo error de socket: ${w.probe_socket_error??0}\nPausas por presion de red: ${w.backpressure_skips??0}\nVecino IP: ${w.neighbor_resolved===undefined?'--':w.neighbor_resolved?'resuelto':'sin resolver'} - revisiones sin resolver: ${w.neighbor_unknown??0}\nRefresco ARP: ${w.arp_keepalive?'activado':'desactivado'} - solicitudes: ${w.arp_requests??0} - errores: ${w.arp_errors??0}\nPing solicitado: ${w.ping_hz_requested??'--'}/s ? intervalo ${w.ping_interval_ms??'--'} ms\nRespuestas/s observadas: ${Number.isFinite(w.ping_reply_hz)?w.ping_reply_hz.toFixed(1):'--'}\nRespuestas: ${w.ping_replies??0} ? timeouts: ${w.ping_timeouts??0}\nPerdidas de ping acumuladas: ${Number.isFinite(w.ping_loss_fraction)?(100*w.ping_loss_fraction).toFixed(1)+' %':'--'}\nUltimo RTT: ${w.last_rtt_ms??'--'} ms (no se usa como actividad)\nIntervalos CSI p50 / p95: ${fmt(v.csi_interval_p50_us)} / ${fmt(v.csi_interval_p95_us)}\nMayor intervalo CSI: ${fmt(v.csi_interval_max_us)} ? huecos >50 ms: ${v.csi_gaps_over_50ms??0}\nUltimo motivo de desconexion Wi-Fi: ${w.last_disconnect_reason??0} (${reasons[w.last_disconnect_reason??0]??'Consultar registro del AP'})\nCallbacks CSI: ${v.csi_callbacks??0} - errores RX: ${v.hardware_errors??0}\nRetransmisiones duplicadas descartadas: ${v.duplicate_drops??0}\nTimestamps antiguos descartados: ${v.stale_timestamps??0}\nMuestras admitidas: ${v.admitted_count??0} - fuera de rejilla: ${v.excess_packets??0}\nEstado del driver: ${w.connect_error??'--'}${w.connected?'':'\nSin conexion al AP: aun no se puede adquirir CSI.'}`;
+  card.append(p);box.append(card);
+ }
+}
+document.getElementById('wifi_form').addEventListener('submit',async e=>{
+ e.preventDefault();const password=el('wifi_password').value;el('wifi_password').value='';
+ await act({action:'wifi_setup',node:el('wifi_node').value,ssid:el('wifi_ssid').value,password,target:el('wifi_target').value,ping_hz:Number(el('wifi_hz').value)});
+});
+const GUI_POLL_MS=100; // Browser refresh; measurement spacing is determined by RX hop.
+let latest=null,settingsNode=null,pollDelay=GUI_POLL_MS;
+function plot(h,now){
+  const c=el('chart'),x=c.getContext('2d'),span=Number(el('timespan').value),w=c.clientWidth,dpr=devicePixelRatio||1;
+  if(c.width!==Math.round(w*dpr)||c.height!==Math.round(200*dpr)){c.width=Math.round(w*dpr);c.height=Math.round(200*dpr)}
+  x.setTransform(dpr,0,0,dpr,0,0);
+  const hi=now??h.at(-1)?.t??0,lo=hi-span;
+  x.clearRect(0,0,w,200);
+  const visible=h.filter(p=>p.t>=lo&&p.t<=hi),bankNode=el('bank_node').value,bankPoints=visible.filter(p=>p.node===bankNode);
+  el('components_node').textContent=el('rawbank_node').textContent=bankNode.toUpperCase();
+  const components=el('components').checked,raw=el('rawbank').checked,hasBank=bankPoints.some(p=>Array.isArray(p.scales)&&p.scales.length>0);
+  const windows=[...new Set(bankPoints.flatMap(p=>(p.scales??[]).map(s=>s.window)).filter(Number.isFinite))].sort((a,b)=>a-b);
+  let max=visible.reduce((m,p)=>Math.max(m,p.score??0),5);
+  if(components)bankPoints.forEach(p=>{for(const value of hasBank?(p.scales??[]).filter(s=>s.valid).map(s=>s.score):[p.score_fast,p.score_slow])if(Number.isFinite(value))max=Math.max(max,value)});
+  if(raw)bankPoints.forEach(p=>{if(Number.isFinite(p.bank_raw))max=Math.max(max,p.bank_raw)});
+  x.font='12px system-ui';x.strokeStyle='#385164';x.fillStyle='#bdcedd';
+  for(let i=0;i<=4;i++){
+    const px=20+i*(w-40)/4;x.beginPath();x.moveTo(px,25);x.lineTo(px,175);x.stroke();
+    x.textAlign=i===0?'left':i===4?'right':'center';x.fillText(((i/4-1)*span).toFixed(1)+' s',px,195);
+  }
+  x.textAlign='left';
+  function curve(points,value,color,dash=[],marks=false){
+    x.strokeStyle=x.fillStyle=color;x.setLineDash(dash);x.beginPath();let active=false;
+    points.forEach(p=>{const score=value(p);if(!Number.isFinite(score)){active=false;return}
+      const a=20+(p.t-lo)/span*(w-40),b=175-Math.max(0,score)/max*145;
+      if(active)x.lineTo(a,b);else x.moveTo(a,b);
+      if(marks){if(p.provisional)x.fillRect(a-2,b-2,4,4);x.fillRect(a-1,b-1,2,2)}active=true;
+    });x.stroke();x.setLineDash([]);
+  }
+  ['rx1','rx2','rx3'].forEach((n,i)=>curve(visible.filter(p=>p.node===n),p=>p.score,['#68c5fd','#f4b66e','#a4e384'][i],[],true));
+  const legend=[];
+  if(components&&hasBank){
+    windows.forEach((window,i)=>{
+      const color=`hsl(${270-i*210/Math.max(1,windows.length-1)} 80% 72%)`;
+      curve(bankPoints,p=>{const scale=p.scales?.find(s=>s.window===window);return scale?.valid?scale.score:null},color,[4,4]);
+      const scale=bankPoints.flatMap(p=>p.scales??[]).find(s=>s.window===window);
+      legend.push((Number.isFinite(scale?.period_ms)?scale.period_ms.toFixed(0)+' ms':window+' slots'));
+    });
+  }else if(components){
+    [['score_fast','#bb9aff'],['score_slow','#f6df77']].forEach(([key,color])=>curve(bankPoints,p=>p[key],color,[4,4]));
+    legend.push('rapida violeta','lenta amarilla');
+  }
+  if(raw){curve(bankPoints,p=>p.bank_raw,'#ff9292',[2,5]);legend.push('raw rojo punteado')}
+  el('scale_legend').textContent=legend.length?bankNode.toUpperCase()+': '+legend.join(' / '):'';
+  el('scale_legend').title='Escalas ordenadas de menor a mayor periodo, de violeta a amarillo. Una curva se interrumpe cuando su escala no es valida; raw precede al filtro temporal.';
+  c.dataset.components=components?(hasBank?'scales':'fast,slow'):'off';
+  c.dataset.scales=components&&hasBank?windows.length:0;c.dataset.raw=raw?'on':'off';
+  x.fillStyle='#d2dce5';x.fillText('Salida confirmada: RX1 azul / RX2 naranja / RX3 verde / max '+max.toFixed(1),20,15,w-40);
+  c.dataset.points=visible.filter(p=>Number.isFinite(p.score)).length;c.dataset.span=span;c.dataset.bankNode=bankNode;
+  plotJoint(latest?.joint_history??[],now);
+}
+function jointActivity(joint,offline=false){
+  const valid=!!joint&&joint.measurement_valid!==false&&joint.state!=='INVALID'&&Number.isFinite(joint.score);
+  const card=el('joint_card');card.dataset.mode=joint?.mode??'INVALID';card.dataset.valid=String(valid);
+  el('joint_score').textContent=valid?joint.score.toFixed(2):'--';
+  const mode=joint?.mode==='PAIR'?`${joint.expected_receivers??joint.contributors?.length??2} receptores`:joint?.mode==='SINGLE_RX'?'Un receptor; sin confirmacion de coincidencia':'Sin coincidencia valida';
+  el('joint_state').textContent=offline?'INVALID - SIN ENLACE CON EL PC':joint?`${joint.state??'INVALID'} - ${mode}`:'Sin indice conjunto en este servidor';
+  const fmt=(v,d=1)=>Number.isFinite(v)?v.toFixed(d):'--';
+  el('joint_details').textContent=joint?`Receptores: ${(joint.contributors??[]).map(v=>v.toUpperCase()).join(' + ')||'--'} / ${joint.expected_receivers??'--'} esperados\nCalidad de cobertura: ${Number.isFinite(joint.quality)?Math.round(100*joint.quality)+' %':'--'} - desfase del par: ${fmt(joint.pair_skew_ms)} ms\nAlineacion: ${joint.alignment==='USB_APPROXIMATE'?'aproximada por USB':joint.alignment??'--'}\nCorrelacion temporal: ${joint.correlation_valid?'r = '+fmt(joint.correlation_peak,3)+' - retardo '+fmt(joint.correlation_lag_ms,0)+' ms':'no disponible'} - ${joint.correlation_pairs??0} pares`:'';
+  el('joint_details').title='La calidad describe cobertura, no probabilidad. La correlacion es un diagnostico de variacion compartida; una correlacion alta no demuestra que la causa sea movimiento humano. Ejemplo: r = 0.8 con retardo de 100 ms.';
+  el('joint_reason').textContent=offline?'La PC no pudo actualizar los resultados.':joint?.reason??'';
+}
+function plotJoint(h,now){
+  const c=el('joint_chart'),x=c.getContext('2d'),span=Number(el('timespan').value),w=c.clientWidth,dpr=devicePixelRatio||1;
+  if(c.width!==Math.round(w*dpr)||c.height!==Math.round(200*dpr)){c.width=Math.round(w*dpr);c.height=Math.round(200*dpr)}
+  x.setTransform(dpr,0,0,dpr,0,0);x.clearRect(0,0,w,200);
+  const hi=now??h.at(-1)?.t??0,lo=hi-span,visible=h.filter(p=>p.t>=lo&&p.t<=hi);
+  const valid=p=>p.state!=='INVALID'&&Number.isFinite(p.score),max=visible.reduce((m,p)=>valid(p)?Math.max(m,p.score):m,1.25);
+  const px=t=>42+(t-lo)/span*(w-62),py=score=>175-Math.max(0,score)/max*145;
+  x.font='12px system-ui';x.fillStyle='#bdcedd';x.strokeStyle='#385164';
+  for(let i=0;i<=4;i++){
+    const t=lo+i*span/4,a=px(t);x.beginPath();x.moveTo(a,25);x.lineTo(a,175);x.stroke();
+    x.textAlign=i===0?'left':i===4?'right':'center';x.fillText(((i/4-1)*span).toFixed(1)+' s',a,195);
+    const value=i*max/4,b=py(value);x.textAlign='right';x.fillText(value.toFixed(2),36,b+4);
+  }
+  x.strokeStyle='#f3d373';x.setLineDash([6,5]);x.beginPath();x.moveTo(42,py(1));x.lineTo(w-20,py(1));x.stroke();x.setLineDash([]);
+  x.strokeStyle=x.fillStyle='#e6a4ff';x.lineWidth=2.5;x.beginPath();let active=false;
+  for(const p of visible){if(!valid(p)){active=false;continue}const a=px(p.t),b=py(p.score);if(active)x.lineTo(a,b);else x.moveTo(a,b);x.fillRect(a-1.5,b-1.5,3,3);active=true}
+  x.stroke();x.lineWidth=1;x.textAlign='left';x.fillText('Conjunto violeta - indice / umbral 1',42,15,w-62);
+  c.dataset.points=visible.filter(valid).length;c.dataset.span=span;c.dataset.max=max;
+}
+function timing(states){
+  return Object.entries(states).filter(([n])=>n!=='tx').map(([n,v])=>{
+    const cfg=v.config??{},hz=(v.tuning?.output_hz??100);
+    const duration=cfg.window?(cfg.window/hz).toFixed(3)+' s':'--';
+    const expected=cfg.hop?(cfg.hop/hz).toFixed(3)+' s':'--';
+    const observed=Number.isFinite(v._result_interval_s)&&(v.measurement_valid??['ACTIVE','CLEAR'].includes(v.state))?v._result_interval_s.toFixed(3)+' s':'--';
+    const bank=cfg.detector_kind===2||v.bank_total>0||(Array.isArray(v.scales)&&v.scales.length>0);
+    const periods=bank?`banco ${(cfg.fast_window/hz).toFixed(3)} a ${duration} / ${cfg.scale_count??v.bank_total??'--'} escalas / consenso ${cfg.consensus_scales??2} / mediana ${2*(cfg.confirm_hops??2)-1} resultados`:cfg.fast_window?'rapida '+(cfg.fast_window/hz).toFixed(3)+' s / lenta window '+(cfg.window??'--')+' ('+duration+')':'window '+(cfg.window??'--')+' ('+duration+')';
+    return `${n.toUpperCase()}: ${periods}, hop ${cfg.hop??'--'} (cada ~${expected}); intervalo recibido ${observed}`;
+  }).join(' | ');
+}
+function bankDiagnostics(v){
+  if(!(v.bank_total>0)&&!(Array.isArray(v.scales)&&v.scales.length>0))return '';
+  const fmt=value=>Number.isFinite(value)?value.toFixed(2):'--';
+  return `\nBanco raw / final: ${fmt(v.bank_raw)} / ${fmt(v.score)}\nEscalas validas: ${v.bank_valid??'--'}/${v.bank_total??v.scales?.length??'--'} / soporte contiguo: ${v.bank_support??'--'}\nEscala dominante: ${Number.isFinite(v.bank_dominant_ms)&&v.bank_dominant_ms>0?v.bank_dominant_ms.toFixed(0)+' ms':'--'}\nConfirmacion: ${Number.isFinite(v.confirmation_progress)?Math.round(100*v.confirmation_progress)+' %':'--'} / sobre umbral: ${v.bank_confirmed?'si':'no'}`;
+}
+function updateBankSettings(){
+  const bank=Number(el('detector_kind').value)===2;
+  el('fast_weight').disabled=Number(el('detector_kind').value)!==1;
+  ['scale_count','consensus_scales','confirm_hops'].forEach(k=>el(k).disabled=!bank);
+  el('consensus_scales').max=el('scale_count').value;
+  if(Number(el('consensus_scales').value)>Number(el('scale_count').value))el('consensus_scales').value=el('scale_count').value;
+}
+function applySettings(){
+  updateBankSettings();
+  const keys=['enter_score','exit_score','window','hop','fast_window','fast_weight','top_k','carrier_mode','detector_kind'];
+  if(Number(el('detector_kind').value)===2)keys.push('scale_count','consensus_scales','confirm_hops');
+  for(const key of keys)if(!el(key).checkValidity()){el(key).reportValidity();return}
+  const command={cmd:'config'};keys.forEach(k=>command[k]=Number(el(k).value));
+  act({action:'command',node:el('node').value,command});
+}
+function loadSettings(){
+  const name=el('node').value,st=latest?.states[name];if(!st?.router||!st?.config){settingsNode=null;return}
+  settingsNode=name;const r=st.router;
+  el('traffic_hz').value=r.ping_hz_requested??100;el('traffic_mode').value=r.probe_mode??'sequential';
+  const defaults={fast_window:25,fast_weight:.65,top_k:12,carrier_mode:1,detector_kind:2,scale_count:7,consensus_scales:2,confirm_hops:2};
+  ['window','hop','coverage','enter_score','exit_score','fast_window','fast_weight','top_k','carrier_mode','detector_kind','scale_count','consensus_scales','confirm_hops'].forEach(k=>el(k).value=st.config[k==='coverage'?'coverage_fraction':k]??defaults[k]??el(k).value);
+  updateBankSettings();
+}
+el('node').addEventListener('change',loadSettings);
+el('components').addEventListener('change',()=>{if(latest)plot(latest.history,latest.elapsed_s)});
+el('rawbank').addEventListener('change',()=>{if(latest)plot(latest.history,latest.elapsed_s)});
+el('bank_node').addEventListener('change',()=>{if(latest)plot(latest.history,latest.elapsed_s)});
+el('detector_kind').addEventListener('change',updateBankSettings);
+el('scale_count').addEventListener('input',updateBankSettings);
+el('timespan').addEventListener('change',()=>{if(latest)plot(latest.history,latest.elapsed_s)});
+async function poll(){try{let r=await fetch('/status',{signal:AbortSignal.timeout(2500)});if(!r.ok)throw Error('HTTP '+r.status);let s=await r.json();pollDelay=Math.max(50,s.poll_ms??GUI_POLL_MS);const initial=latest===null;latest=s;if(initial||settingsNode!==el('node').value)loadSettings();el('cadence').textContent=timing(s.states);el('fusion').textContent='Fusión: '+s.fused;jointActivity(s.joint_activity);const deviceWait=Math.max(0,...Object.values(s.states).map(v=>v.calibration_wait_s??0));const waitSeconds=deviceWait||(s.label==='CALIBRATION_COUNTDOWN'?s.remaining:0);const waiting=waitSeconds>0;el('calibrate').disabled=waiting;el('cancelwait').hidden=!waiting;el('phase').textContent=waiting?'Aléjate de la zona: la calibración empieza en '+waitSeconds+' s':({UNLABELED:'Sin etiqueta',LOCAL_BACKGROUND_CALIBRATION:Object.entries(s.states).filter(([n,v])=>n!=='tx'&&v.role!=='TX').every(([,v])=>v.amplitude_calibrated)?'Referencia de amplitud lista':'Obteniendo referencia de amplitud',CALIBRATION_CANCELLED:'Espera cancelada',SEQUENCE_COMPLETE:'Prueba terminada'}[s.label]??s.label)+(s.remaining!==null?' · '+s.remaining+' s':'');el('issues').textContent=Object.values(s.issues).join(' | ');el('folder').textContent='Sesión: '+s.folder;el('nodes').replaceChildren();Object.entries(s.states).forEach(([n,v])=>{let d=document.createElement('div');d.className='card';let title=document.createElement('h3');title.textContent=n+' · '+v.state;let p=document.createElement('pre');p.textContent=`${v.amplitude_calibrated?'Referencia de amplitud lista':'PROVISIONAL: requiere referencia de amplitud'}\n${v.reason}${v.calibration_wait_s?' ('+v.calibration_wait_s+' s)':''}\nID: ${v.device_id??n}\nCSI del AP: ${(v.effective_fs??0).toFixed(1)} Hz (no es la tasa de ping)\nScore de forma (%): ${(v.measurement_valid??['ACTIVE','CLEAR'].includes(v.state))?(v.score??0).toFixed(2):'—'} · umbral: ${v.config?.enter_score}${bankDiagnostics(v)}\nRapida: ${v.fast_valid?v.score_fast?.toFixed(2):'--'} / lenta: ${v.slow_valid?v.score_slow?.toFixed(2):'--'} / fuente: ${v.fusion_source??'--'}\nCobertura rapida/lenta: ${Math.round(100*(v.coverage_fast??0))}% / ${Math.round(100*(v.coverage_slow??0))}%\nEscala LED: ${v.led_peak?.toFixed(2)??'--'} % \nRecuperaciones: ${v.recovery_count??0} (${v.last_recovery??'--'})\nRSSI: ${v.rssi??'--'} dBm · ruido: ${v.noise_floor??'--'} dBm\nCobertura temporal: ${Number.isFinite(v.window_coverage)?(100*v.window_coverage).toFixed(0):'--'} %\nACF del CV anterior: ${v.temporal_autocorr?.toFixed(3)??'--'} (margen ${v.coherence_floor?.toFixed(3)??'--'})\nCV anterior: ${v.turbulence?.toFixed(3)??'--'} - IQR relativo: ${v.turbulence_relative_iqr?.toFixed(3)??'--'}\nErrores RX: ${v.hardware_errors??0} - duplicados: ${v.duplicate_drops??0}\nCola: ${v.queue_drops??'--'} · USB: ${v.telemetry_drops??'--'}\nSubportadoras utilizables: ${v.usable_carriers??v.selected??'--'} / ${v.selected??'--'} (min. ${v.required_carriers??'--'})\nSubportadoras destacadas: ${(v.top??[]).join(', ')} · referencia: ${v.reference_id??'--'}`;if(v.role==='TX')p.textContent=`TX: ${v.commanded_hz} Hz solicitados\nEnvíos aceptados: ${v.tx_count} · errores: ${v.tx_errors}\nCanal: ${v.config?.channel}\n${v.board??''} · ${v.transport??''}`;d.append(title,p);el('nodes').append(d)});plot(s.history,s.elapsed_s);ActivityMap.update(s.states);routerDiagnostics(s.states)}catch(e){el('fusion').textContent='INVALID · SIN ENLACE CON EL PC';jointActivity(null,true);el('issues').textContent=e.message}finally{setTimeout(poll,pollDelay)}}ActivityMap.init();poll();</script></html>
